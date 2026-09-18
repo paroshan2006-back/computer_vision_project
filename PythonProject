@@ -1,1 +1,124 @@
+import argparse
+import os
+import sys
 
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+def load_image(path: str) -> np.ndarray:
+
+    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise FileNotFoundError(f"Could not read image at: {path}")
+    return img
+
+
+def make_demo_image(size: int = 400) -> np.ndarray:
+
+    img = np.zeros((size, size), dtype=np.uint8)
+    cv2.rectangle(img, (50, 50), (180, 180), 255, -1)
+    cv2.circle(img, (280, 280), 80, 200, -1)
+    cv2.line(img, (0, 350), (400, 300), 150, 6)
+    triangle = np.array([[250, 40], [350, 40], [300, 140]], np.int32)
+    cv2.fillPoly(img, [triangle], 100)
+
+    noise = np.random.normal(0, 8, img.shape).astype(np.int16)
+    noisy = np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+    return noisy
+
+
+def apply_sobel(img: np.ndarray, ksize: int = 3) -> np.ndarray:
+
+    blurred = cv2.GaussianBlur(img, (3, 3), 0)
+    grad_x = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=ksize)
+    grad_y = cv2.Sobel(blurred, cv2.CV_64F, 0, 1, ksize=ksize)
+    magnitude = np.sqrt(grad_x ** 2 + grad_y ** 2)
+    magnitude = np.clip((magnitude / magnitude.max()) * 255, 0, 255)
+    return magnitude.astype(np.uint8)
+
+
+def apply_laplacian(img: np.ndarray, ksize: int = 3) -> np.ndarray:
+
+    blurred = cv2.GaussianBlur(img, (3, 3), 0)
+    lap = cv2.Laplacian(blurred, cv2.CV_64F, ksize=ksize)
+    lap = np.uint8(np.clip(np.abs(lap), 0, 255))
+    return lap
+
+
+def apply_canny(img: np.ndarray, low: int = 50, high: int = 150) -> np.ndarray:
+
+    blurred = cv2.GaussianBlur(img, (5, 5), 1.4)
+    edges = cv2.Canny(blurred, low, high)
+    return edges
+
+
+def apply_dog(img: np.ndarray, ksize1: int = 3, ksize2: int = 7) -> np.ndarray:
+
+    g1 = cv2.GaussianBlur(img, (ksize1, ksize1), 0)
+    g2 = cv2.GaussianBlur(img, (ksize2, ksize2), 0)
+    dog = cv2.absdiff(g1, g2)
+    dog = cv2.normalize(dog, None, 0, 255, cv2.NORM_MINMAX)
+    return dog
+
+
+def run_pipeline(image_path: str, output_dir: str, canny_low: int, canny_high: int):
+    os.makedirs(output_dir, exist_ok=True)
+
+    if image_path:
+        img = load_image(image_path)
+        title_source = os.path.basename(image_path)
+    else:
+        print("No image provided — generating a synthetic demo image.")
+        img = make_demo_image()
+        title_source = "synthetic demo image"
+
+    results = {
+        "Original": img,
+        "Sobel": apply_sobel(img),
+        "Laplacian (LoG)": apply_laplacian(img),
+        f"Canny ({canny_low}, {canny_high})": apply_canny(img, canny_low, canny_high),
+        "Difference of Gaussians": apply_dog(img),
+    }
+
+
+    for name, result in results.items():
+        safe_name = name.lower().replace(" ", "_").replace("(", "").replace(")", "").replace(",", "")
+        out_path = os.path.join(output_dir, f"{safe_name}.png")
+        cv2.imwrite(out_path, result)
+
+
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    fig.suptitle(f"Edge Detection Comparison — {title_source}", fontsize=14)
+    axes = axes.flatten()
+    for ax, (name, result) in zip(axes, results.items()):
+        ax.imshow(result, cmap="gray")
+        ax.set_title(name)
+        ax.axis("off")
+    for ax in axes[len(results):]:
+        ax.axis("off")
+
+    plt.tight_layout()
+    comparison_path = os.path.join(output_dir, "comparison.png")
+    plt.savefig(comparison_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"\nSaved {len(results)} individual result images to: {output_dir}")
+    print(f"Saved side-by-side comparison to: {comparison_path}")
+    return comparison_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Edge Detection System")
+    parser.add_argument("image", nargs="?", default=None, help="Path to input image (optional)")
+    parser.add_argument("--output", default="output", help="Directory to save results")
+    parser.add_argument("--canny-low", type=int, default=50, help="Canny lower threshold")
+    parser.add_argument("--canny-high", type=int, default=150, help="Canny upper threshold")
+    args = parser.parse_args()
+
+    run_pipeline(args.image, args.output, args.canny_low, args.canny_high)
+
+
+if __name__ == "__main__":
+    main()
